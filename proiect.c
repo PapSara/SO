@@ -9,22 +9,21 @@ gcc -Wall -o exec prog.c
 ./exec arg1 arg2 -o iesire
 ./exec -o output input1 input2
 */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <string.h>
 
 // Structura pentru stocarea informatiilor despre un fisier
 typedef struct Info {
     char name[256];
-    ino_t inode; /* inode number */
-    off_t size; /* total size, in bytes */
+  ino_t inode; // inode  
+  off_t size; // dimensiune totala in bytes 
     time_t modified_time;
-}INFO;
+} INFO;
 
 // Functie pentru a crea un snapshot si a scrie informatiile intr-un fisier care se creeaza la momentul executiei
 void createSnapshot(const char *directory, const char *snapshot) {
@@ -33,52 +32,38 @@ void createSnapshot(const char *directory, const char *snapshot) {
         printf("Nu am putut deschide directorul.\n");
         exit(EXIT_FAILURE);
     }
+
+    printf("Director deschis cu succes: %s\n", directory);
+
     
-    int snaps = open(snapshot, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-    /*
-    O_WRONLY - deschidere numai pentru scriere
-    O_CREAT - crearea fisierului, daca el nu exista deja; daca e folosita cu aceasta optiune,
-    functia open trebuie sa primeasca si parametrul mode.
-    O_TRUNC - daca fisierul exista, continutul lui este sters
-    S_IRUSR - drept de citire pentru proprietarul fisierului (user)
-    S_IWUSR - drept de scriere pentru proprietarul fisierului (user)
-    */
+    int snaps = open(snapshot, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IROTH | S_IRGRP | S_IWOTH);
     if (snaps == -1) {
         printf("Nu am putut crea fișierul de snapshot.\n");
         closedir(dir);
         exit(EXIT_FAILURE);
     }
 
+    printf("Fișierul de snapshot creat cu succes: %s\n", snapshot);
+    
     struct dirent *in;
     struct stat buff;
     INFO file_info;
 
     // Parcurge fiecare intrare in director
     while ((in = readdir(dir)) != NULL) {
-        // Construieste calea completa pentru fiecare fisier / director
-        /*int snprintf(char *str, size_t size, const char *format, …);
-        Parameters:
-
-*str : is a buffer.
-size : is the maximum number of bytes (characters) that will be written to the buffer.
-format : C string that contains a format string that follows the same specifications as format in printf
-… : the optional ( …) arguments are just the string formats like (“%d”, myint) as seen in printf.
-Return value:
-
-The number of characters that would have been written on the buffer, if ‘n’ had been sufficiently large. The terminating null character is not counted.
-If an encoding error occurs, a negative number is returned.
-        */
-	char path[512];
-        snprintf(path, sizeof(path), "%s/%s", directory, in->d_name);
- 
-        if (lstat(path, &buff) == -1) {
-            printf("Eroare la obtinerea informatiilor");
-            exit(EXIT_FAILURE);
-        }
-
-        // Ignora "." și ".."
+       // Ignora "." și ".."
         if (strcmp(in->d_name, ".") == 0 || strcmp(in->d_name, "..") == 0) {
             continue;
+        }
+
+        // Construieste calea completa pentru fiecare fisier / director
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", directory, in->d_name);
+	printf("Cale: %s\n", path);
+ 
+        if (lstat(path, &buff) == -1) {
+            printf("Eroare la obtinerea informatiilor.\n");
+            exit(EXIT_FAILURE);
         }
 
         // Introducerea informatiilor in structura
@@ -87,30 +72,22 @@ If an encoding error occurs, a negative number is returned.
         file_info.size = buff.st_size;
         file_info.modified_time = buff.st_mtime;
         
-        // Scrierea numele fișierului
-        write(snaps, file_info.name, strlen(file_info.name));
-        write(snaps, " ", 1);
+        // Scrierea informatiilor in fisierul de snapshot
+        char buffer[1024];
+        int len = snprintf(buffer, sizeof(buffer), "Nume: %s Inode: %lu Dimensiune: %lld Modificat: %ld\n", file_info.name, (unsigned long)file_info.inode, (long long)file_info.size, (long)file_info.modified_time);
 
-        // Convertirea inode-ului în șir de caractere și scrierea sa în fișier
-        char inode_buffer[32];
-        int inode_length = snprintf(inode_buffer, sizeof(inode_buffer), "%lu", (unsigned long)file_info.inode);
-        write(snaps, inode_buffer, inode_length);
-        write(snaps, " ", 1);
-
-        // Convertirea dimensiunii în șir de caractere și scrierea sa în fișier
-        char size_buffer[32];
-        int size_length = snprintf(size_buffer, sizeof(size_buffer), "%lld", (long long)file_info.size);
-        write(snaps, size_buffer, size_length);
-        write(snaps, " ", 1);
-
-        // Convertirea datei de modificare în șir de caractere și scrierea sa în fișier
-        char modified_time_buffer[32];
-        int modified_time_length = snprintf(modified_time_buffer, sizeof(modified_time_buffer), "%ld", (long)file_info.modified_time);
-        write(snaps, modified_time_buffer, modified_time_length);
-
-        // Scrierea unui caracter nou de linie pentru a termina linia
-        write(snaps, "\n", 1);
-
+	int bytes_written = write(snaps, buffer, len);
+if (bytes_written == -1) {
+    printf("Eroare la scrierea in fisierul de snapshot.\n");
+    close(snaps);
+    closedir(dir);
+    exit(EXIT_FAILURE);
+} else if (bytes_written != len) {
+    printf("Eroare la scrierea in fisierul de snapshot: Numar incorect de octeti scrise.\n");
+    close(snaps);
+    closedir(dir);
+    exit(EXIT_FAILURE);
+}
 
         // Verifica daca este director si apeleaza recursiv functia
         if (S_ISDIR(buff.st_mode)) {
@@ -118,8 +95,8 @@ If an encoding error occurs, a negative number is returned.
         }
     }
 
-    closedir(dir);
     close(snaps);
+    closedir(dir);
 }
 
 int main(int argc, char *argv[]) {
@@ -131,7 +108,7 @@ int main(int argc, char *argv[]) {
 
     // Verifica daca argumentul este un director
     struct stat statbuf;
-    if (lstat(argv[1], &statbuf) == -1 || !S_ISDIR(statbuf.st_mode)) {
+    if (lstat(argv[1], &statbuf) == -1 || (S_ISDIR(statbuf.st_mode) == 0)) {
         printf("Argumentul trebuie sa fie director.\n");
         exit(EXIT_FAILURE);
     }
