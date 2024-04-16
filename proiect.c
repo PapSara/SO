@@ -17,105 +17,150 @@ gcc -Wall -o exec prog.c
 #include <unistd.h>
 #include <string.h>
 
-// Structura pentru stocarea informatiilor despre un fisier
+#define MAX_DIRS 10 // Numărul maxim de directoare acceptate în linia de comandă
+
+// Structura pentru stocarea informatiilor despre un fisier sau director
 typedef struct Info {
     char name[256];
-  ino_t inode; // inode  
-  off_t size; // dimensiune totala in bytes 
+    ino_t inode; // inode  
+    off_t size; // dimensiune totala in bytes 
     time_t modified_time;
 } INFO;
 
 // Functie pentru a crea un snapshot si a scrie informatiile intr-un fisier care se creeaza la momentul executiei
 void createSnapshot(const char *directory, const char *snapshot) {
-    DIR *dir = opendir(directory);
-    if (dir == NULL) {
-        printf("Nu am putut deschide directorul.\n");
+    struct stat buff;
+    INFO dir_info;
+
+    // Obține informații despre directorul însuși
+    if (lstat(directory, &buff) == -1) {
+        printf("Eroare la obtinerea informatiilor despre director.\n");
         exit(EXIT_FAILURE);
     }
 
-    printf("Director deschis cu succes: %s\n", directory);
+    // Introdu informațiile despre director în structură
+    strncpy(dir_info.name, directory, sizeof(dir_info.name));
+    dir_info.inode = buff.st_ino;
+    dir_info.size = buff.st_size;
+    dir_info.modified_time = buff.st_mtime;
 
-    
+    // Deschide fișierul de snapshot
     int snaps = open(snapshot, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IROTH | S_IRGRP | S_IWOTH);
     if (snaps == -1) {
         printf("Nu am putut crea fișierul de snapshot.\n");
-        closedir(dir);
         exit(EXIT_FAILURE);
     }
 
-    printf("Fișierul de snapshot creat cu succes: %s\n", snapshot);
-    
-    struct dirent *in;
-    struct stat buff;
-    INFO file_info;
+    // Scrie informațiile despre director în fișierul de snapshot
+    char dir_buffer[1024];
+    int dir_len = snprintf(dir_buffer, sizeof(dir_buffer), "Nume director: %s Inode: %lu Dimensiune: %lld Modificat: %ld\n",
+                           dir_info.name, (unsigned long)dir_info.inode, (long long)dir_info.size, (long)dir_info.modified_time);
+    int dir_bytes_written = write(snaps, dir_buffer, dir_len);
+    if (dir_bytes_written == -1 || dir_bytes_written != dir_len) {
+        printf("Eroare la scrierea informatiilor despre director în fișierul de snapshot.\n");
+        close(snaps);
+        exit(EXIT_FAILURE);
+    }
 
-    // Parcurge fiecare intrare in director
-    while ((in = readdir(dir)) != NULL) {
-       // Ignora "." și ".."
-        if (strcmp(in->d_name, ".") == 0 || strcmp(in->d_name, "..") == 0) {
+    // Deschide directorul pentru a citi conținutul său
+    DIR *dir = opendir(directory);
+    if (dir == NULL) {
+        printf("Nu am putut deschide directorul.\n");
+        close(snaps);
+        exit(EXIT_FAILURE);
+    }
+
+    // Parcurge fiecare intrare în director
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        // Ignoră "." și ".."
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
         }
 
-        // Construieste calea completa pentru fiecare fisier / director
+        // Construiește calea completă pentru fiecare fișier / director
         char path[1024];
-        snprintf(path, sizeof(path), "%s/%s", directory, in->d_name);
-	printf("Cale: %s\n", path);
- 
+        snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
+
+        // Obține informații despre fișier / director
         if (lstat(path, &buff) == -1) {
-            printf("Eroare la obtinerea informatiilor.\n");
+            printf("Eroare la obtinerea informatiilor despre %s.\n", path);
+            closedir(dir);
+            close(snaps);
             exit(EXIT_FAILURE);
         }
 
-        // Introducerea informatiilor in structura
-        strncpy(file_info.name, in->d_name, sizeof(file_info.name));
-        file_info.inode = buff.st_ino;
-        file_info.size = buff.st_size;
-        file_info.modified_time = buff.st_mtime;
+        // Introdu informațiile despre fișier / director în structură
+        strncpy(dir_info.name, entry->d_name, sizeof(dir_info.name));
+        dir_info.inode = buff.st_ino;
+        dir_info.size = buff.st_size;
+        dir_info.modified_time = buff.st_mtime;
+
+        // Scrie informațiile despre fișier / director în fișierul de snapshot
+        char entry_buffer[1024];
+        int entry_len = snprintf(entry_buffer, sizeof(entry_buffer), "Nume: %s Inode: %lu Dimensiune: %lld Modificat: %ld\n",
+                                 dir_info.name, (unsigned long)dir_info.inode, (long long)dir_info.size, (long)dir_info.modified_time);
+        int entry_bytes_written = write(snaps, entry_buffer, entry_len);
+        if (entry_bytes_written == -1 || entry_bytes_written != entry_len) {
+            printf("Eroare la scrierea informatiilor despre %s în fișierul de snapshot.\n", path);
+            closedir(dir);
+            close(snaps);
+            exit(EXIT_FAILURE);
+        }
         
-        // Scrierea informatiilor in fisierul de snapshot
-        char buffer[1024];
-        int len = snprintf(buffer, sizeof(buffer), "Nume: %s Inode: %lu Dimensiune: %lld Modificat: %ld\n", file_info.name, (unsigned long)file_info.inode, (long long)file_info.size, (long)file_info.modified_time);
-
-	int bytes_written = write(snaps, buffer, len);
-if (bytes_written == -1) {
-    printf("Eroare la scrierea in fisierul de snapshot.\n");
-    close(snaps);
-    closedir(dir);
-    exit(EXIT_FAILURE);
-} else if (bytes_written != len) {
-    printf("Eroare la scrierea in fisierul de snapshot: Numar incorect de octeti scrise.\n");
-    close(snaps);
-    closedir(dir);
-    exit(EXIT_FAILURE);
-}
-
-        // Verifica daca este director si apeleaza recursiv functia
         if (S_ISDIR(buff.st_mode)) {
             createSnapshot(path, snapshot);
         }
     }
 
-    close(snaps);
+    // Închide directorul și fișierul de snapshot
     closedir(dir);
+    close(snaps);
 }
 
 int main(int argc, char *argv[]) {
-    // Verifica daca calea directorului a fost data in linia de comanda si daca este singurul argument
-    if (argc != 2) {
-        printf("Argumente insuficiente sau prea multe\n");
+    char output_dir[256] = ""; // Directorul de ieșire pentru snapshot-uri
+    char *dirs[MAX_DIRS]; // Vector pentru a stoca directoarele primite în linia de comandă
+    int num_dirs = 0; // Numărul de directoare primite în linia de comandă
+
+    // Verificarea existenței argumentelor în linia de comandă
+    if (argc < 3) {
+        printf("Argumente insuficiente. Utilizare: %s -o director_iesire dir1 dir2 ... dirN\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
-    // Verifica daca argumentul este un director
-    struct stat statbuf;
-    if (lstat(argv[1], &statbuf) == -1 || (S_ISDIR(statbuf.st_mode) == 0)) {
-        printf("Argumentul trebuie sa fie director.\n");
+    // Parsarea opțiunii de director de ieșire
+    if (strcmp(argv[1], "-o") != 0) {
+        printf("Prima opțiune trebuie să fie '-o'.\n");
         exit(EXIT_FAILURE);
     }
 
-    // Creeaza snapshot-ul
-    createSnapshot(argv[1], "snapshot.txt");
+    strncpy(output_dir, argv[2], sizeof(output_dir) - 1);
 
-    printf("Snapshot-ul a fost creat cu succes.\n");
+    // Parsarea directoarelor din argumentele de linie de comandă
+    for (int i = 3; i < argc && num_dirs < MAX_DIRS; i++) {
+        dirs[num_dirs++] = argv[i];
+    }
+
+    // Verificarea existenței cel puțin unui director în linia de comandă
+    if (num_dirs == 0) {
+        printf("Specificati cel putin un director.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // Crearea snapshot-urilor pentru fiecare director
+    for (int i = 0; i < num_dirs; i++) {
+        printf("Creare snapshot pentru directorul: %s\n", dirs[i]);
+        char snapshot_path[512];
+        snprintf(snapshot_path, sizeof(snapshot_path), "%s/snapshot_%d.txt", output_dir, i + 1);
+        createSnapshot(dirs[i], snapshot_path);
+        printf("Snapshot-ul pentru directorul %s a fost creat cu succes.\n", dirs[i]);
+    }
+
     return 0;
 }
+
+
+
+
+
