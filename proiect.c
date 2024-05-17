@@ -70,7 +70,7 @@ void populateSnapshot(const char *directory, const char *snapshot, const char *c
 
     int snaps = open(snapshot, O_WRONLY | O_APPEND, S_IRUSR | S_IWUSR | S_IROTH | S_IRGRP | S_IWOTH);
     if (snaps == -1) {
-        printf("Nu am putut deschide fișierul de snapshot.\n");
+        printf("Nu am putut deschide fisierul de snapshot.\n");
         exit(EXIT_FAILURE);
     }
 
@@ -137,7 +137,7 @@ int compareSnapshots(const char *snapshot1, const char *snapshot2) {
     FILE *file2 = fopen(snapshot2, "r");
 
     if (!file1 || !file2) {
-        printf("Nu am putut deschide fișierele pentru comparare.\n");
+        printf("Nu am putut deschide fiaierele pentru comparare.\n");
         return -1;
     }
 
@@ -147,19 +147,19 @@ int compareSnapshots(const char *snapshot1, const char *snapshot2) {
     while (fgets(line1, sizeof(line1), file1) && fgets(line2, sizeof(line2), file2)) {
         if (strcmp(line1, line2) != 0) {
             differences++;
-            printf("Diferență găsită:\n%s\n%s\n", line1, line2);
+            printf("Diferența gasita:\n%s\n%s\n", line1, line2);
         }
     }
 
     // Verifica dacă unul dintre fișiere are linii suplimentare
     while (fgets(line1, sizeof(line1), file1)) {
         differences++;
-        printf("Linie suplimentară în snapshot anterior:\n%s\n", line1);
+        printf("Linie suplimentara in snapshot anterior:\n%s\n", line1);
     }
 
     while (fgets(line2, sizeof(line2), file2)) {
         differences++;
-        printf("Linie suplimentară în snapshot curent:\n%s\n", line2);
+        printf("Linie suplimentara in snapshot curent:\n%s\n", line2);
     }
 
     fclose(file1);
@@ -173,7 +173,7 @@ void updateSnapshot(const char *snapshot1, const char *snapshot2) {
     FILE *dest = fopen(snapshot1, "w");
 
     if (!src || !dest) {
-        printf("Nu am putut deschide fișierele pentru actualizare.\n");
+        printf("Nu am putut deschide fisierele pentru actualizare.\n");
         if (src) fclose(src);
         if (dest) fclose(dest);
         return;
@@ -246,14 +246,14 @@ int main(int argc, char *argv[]) {
         if (access(previous_snapshot_path, F_OK) == 0) {
             int differences = compareSnapshots(previous_snapshot_path, snapshot_path);
             if (differences > 0) {
-                printf("Au fost găsite %d diferențe între snapshot-uri. Actualizare snapshot anterior.\n", differences);
+                printf("Au fost gasite %d diferente intre snapshot-uri. Actualizare snapshot anterior.\n", differences);
                 updateSnapshot(previous_snapshot_path, snapshot_path);
             } else {
-                printf("Nu au fost găsite diferențe între snapshot-uri.\n");
+                printf("Nu au fost gasite diferente intre snapshot-uri.\n");
             }
         } else {
             // Dacă nu există un snapshot anterior, creează unul
-            printf("Nu a fost găsit un snapshot anterior. Creare unul nou.\n");
+            printf("Nu a fost gasit un snapshot anterior. Creare unul nou.\n");
             updateSnapshot(previous_snapshot_path, snapshot_path);
         }
     }
