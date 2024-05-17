@@ -188,6 +188,22 @@ void updateSnapshot(const char *snapshot1, const char *snapshot2) {
     fclose(dest);
 }
 
+int arePermisiuni(const char *cale) {
+    struct stat statbuf;
+
+    if (stat(cale, &statbuf) != 0) {
+        perror("Eroare la accesarea fisierului");
+        return -1; // Nu se poate accesa informatia
+    }
+    
+    // Verificam permisiunile de citire, scriere si executie pentru utilizator, grup si altii
+    if ((statbuf.st_mode & 0777) == 0) {
+        return 1; // Nu are nicio permisiune
+    } else {
+        return 0; // Are permisiuni
+    }
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 3) {
         fprintf(stderr, "Usage: %s -o output_dir dir1 [dir2 ...]\n", argv[0]);
