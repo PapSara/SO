@@ -33,7 +33,7 @@ void createSnapshot(const char *directory, const char *snapshot) {
     }
 
     // Deschide fisierul de snapshot
-    int snaps = open(snapshot, O_WRONLY | O_CREAT | O_APPEND | O_TRUNC, S_IRUSR | S_IWUSR | S_IROTH | S_IRGRP | S_IWOTH);
+    int snaps = open(snapshot, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IROTH | S_IRGRP | S_IWOTH);
     if (snaps == -1) {
         printf("Nu am putut crea fișierul de snapshot.\n");
         exit(EXIT_FAILURE);
@@ -59,6 +59,8 @@ void createSnapshot(const char *directory, const char *snapshot) {
         close(snaps);
         exit(EXIT_FAILURE);
     }
+
+    close(snaps);
 }
 
 // Functie pentru a crea un snapshot si a scrie informatiile intr-un fisier care se creeaza la momentul executiei
@@ -130,6 +132,62 @@ void populateSnapshot(const char *directory, const char *snapshot, const char *c
     close(snaps);
 }
 
+int compareSnapshots(const char *snapshot1, const char *snapshot2) {
+    FILE *file1 = fopen(snapshot1, "r");
+    FILE *file2 = fopen(snapshot2, "r");
+
+    if (!file1 || !file2) {
+        printf("Nu am putut deschide fișierele pentru comparare.\n");
+        return -1;
+    }
+
+    char line1[1024], line2[1024];
+    int differences = 0;
+
+    while (fgets(line1, sizeof(line1), file1) && fgets(line2, sizeof(line2), file2)) {
+        if (strcmp(line1, line2) != 0) {
+            differences++;
+            printf("Diferență găsită:\n%s\n%s\n", line1, line2);
+        }
+    }
+
+    // Verifica dacă unul dintre fișiere are linii suplimentare
+    while (fgets(line1, sizeof(line1), file1)) {
+        differences++;
+        printf("Linie suplimentară în snapshot anterior:\n%s\n", line1);
+    }
+
+    while (fgets(line2, sizeof(line2), file2)) {
+        differences++;
+        printf("Linie suplimentară în snapshot curent:\n%s\n", line2);
+    }
+
+    fclose(file1);
+    fclose(file2);
+
+    return differences;
+}
+
+void updateSnapshot(const char *snapshot1, const char *snapshot2) {
+    FILE *src = fopen(snapshot2, "r");
+    FILE *dest = fopen(snapshot1, "w");
+
+    if (!src || !dest) {
+        printf("Nu am putut deschide fișierele pentru actualizare.\n");
+        if (src) fclose(src);
+        if (dest) fclose(dest);
+        return;
+    }
+
+    char buffer[1024];
+    while (fgets(buffer, sizeof(buffer), src)) {
+        fputs(buffer, dest);
+    }
+
+    fclose(src);
+    fclose(dest);
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 3) {
         fprintf(stderr, "Usage: %s -o output_dir dir1 [dir2 ...]\n", argv[0]);
@@ -175,11 +233,29 @@ int main(int argc, char *argv[]) {
     // Proceed with snapshot creation
     for (i = 0; i < num_dirs; i++) {
         printf("Creare snapshot pt directorul: %s\n", dirs[i]);
-        char snapshot_path[512];
+        char snapshot_path[512], previous_snapshot_path[512];
         snprintf(snapshot_path, sizeof(snapshot_path), "%s/snapshot_%d.txt", output_dir, i);
+        snprintf(previous_snapshot_path, sizeof(previous_snapshot_path), "%s/previous_snapshot_%d.txt", output_dir, i);
+
+        // Creare snapshot curent
         createSnapshot(dirs[i], snapshot_path);
+        populateSnapshot(dirs[i], snapshot_path, dirs[i]);
         printf("Snapshot creat cu succes pentru: %s\n", dirs[i]);
-        populateSnapshot(dirs[i], snapshot_path, dirs[i]);  // Aici trebuie să trecem calea inițială
+
+        // Comparare snapshot curent cu cel anterior
+        if (access(previous_snapshot_path, F_OK) == 0) {
+            int differences = compareSnapshots(previous_snapshot_path, snapshot_path);
+            if (differences > 0) {
+                printf("Au fost găsite %d diferențe între snapshot-uri. Actualizare snapshot anterior.\n", differences);
+                updateSnapshot(previous_snapshot_path, snapshot_path);
+            } else {
+                printf("Nu au fost găsite diferențe între snapshot-uri.\n");
+            }
+        } else {
+            // Dacă nu există un snapshot anterior, creează unul
+            printf("Nu a fost găsit un snapshot anterior. Creare unul nou.\n");
+            updateSnapshot(previous_snapshot_path, snapshot_path);
+        }
     }
 
     return 0;
