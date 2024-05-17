@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <time.h>
 #include <stdint.h>
+#include <sys/wait.h>
 
 #define MAX_DIRS 10 // Numarul maxim de directoare acceptate in linia de comanda
 
@@ -35,11 +36,11 @@ void createSnapshot(const char *directory, const char *snapshot) {
     // Deschide fisierul de snapshot
     int snaps = open(snapshot, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IROTH | S_IRGRP | S_IWOTH);
     if (snaps == -1) {
-        printf("Nu am putut crea fișierul de snapshot.\n");
+        printf("Nu am putut crea fisierul de snapshot.\n");
         exit(EXIT_FAILURE);
     }
 
-    // Introdu informatiile despre director in structura
+    // Introducem informatiile despre director in structura
     strncpy(dir_info.name, directory, sizeof(dir_info.name));
     dir_info.inode = buff.st_ino;
     dir_info.size = buff.st_size;
@@ -63,7 +64,6 @@ void createSnapshot(const char *directory, const char *snapshot) {
     close(snaps);
 }
 
-// Functie pentru a crea un snapshot si a scrie informatiile intr-un fisier care se creeaza la momentul executiei
 void populateSnapshot(const char *directory, const char *snapshot, const char *cale) {
     struct stat buff;
     INFO dir_info;
@@ -82,7 +82,7 @@ void populateSnapshot(const char *directory, const char *snapshot, const char *c
         exit(EXIT_FAILURE);
     }
 
-    // Parcurge fiecare intrare în director
+    // Parcurge fiecare intrare in director
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         // Ignoră "." si ".."
@@ -94,7 +94,7 @@ void populateSnapshot(const char *directory, const char *snapshot, const char *c
         char path[1024];
         snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
 
-        // Obține informatii despre fisier / director
+        // Obtine informatii despre fisier / director
         if (lstat(path, &buff) == -1) {
             printf("Eroare la obtinerea informatiilor despre %s.\n", path);
             closedir(dir);
@@ -102,7 +102,7 @@ void populateSnapshot(const char *directory, const char *snapshot, const char *c
             exit(EXIT_FAILURE);
         }
 
-        // Introdu informatiile despre fisier / director in structura
+        // Introducem informatiile despre fisier / director in structura
         strncpy(dir_info.name, entry->d_name, sizeof(dir_info.name));
         dir_info.inode = buff.st_ino;
         dir_info.size = buff.st_size;
@@ -137,7 +137,7 @@ int compareSnapshots(const char *snapshot1, const char *snapshot2) {
     FILE *file2 = fopen(snapshot2, "r");
 
     if (!file1 || !file2) {
-        printf("Nu am putut deschide fiaierele pentru comparare.\n");
+        printf("Nu am putut deschide fisierele pentru comparare.\n");
         return -1;
     }
 
@@ -147,11 +147,11 @@ int compareSnapshots(const char *snapshot1, const char *snapshot2) {
     while (fgets(line1, sizeof(line1), file1) && fgets(line2, sizeof(line2), file2)) {
         if (strcmp(line1, line2) != 0) {
             differences++;
-            printf("Diferența gasita:\n%s\n%s\n", line1, line2);
+            printf("Diferenta gasita:\n%s\n%s\n", line1, line2);
         }
     }
 
-    // Verifica dacă unul dintre fișiere are linii suplimentare
+    // Verifica daca unul dintre fisiere are linii suplimentare
     while (fgets(line1, sizeof(line1), file1)) {
         differences++;
         printf("Linie suplimentara in snapshot anterior:\n%s\n", line1);
@@ -195,11 +195,12 @@ int main(int argc, char *argv[]) {
     }
 
     char output_dir[256] = "";
+    char isolated_dir[256] = "";
     char *dirs[MAX_DIRS];
     int num_dirs = 0;
     int i;
 
-    // gaseste directorul de output
+    // Gaseste directorul de output
     for (i = 1; i < argc - 1; i++) {
         if (strcmp(argv[i], "-o") == 0) {
             strncpy(output_dir, argv[i + 1], sizeof(output_dir) - 1);
@@ -212,12 +213,28 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // parcurge sarind peste -o si argumentul sau
+    // Gaseste directorul de izolare
+
+    for (i = 1; i < argc - 1; i++) {
+        if (strcmp(argv[i], "-s") == 0) {
+            strncpy(isolated_dir, argv[i + 1], sizeof(isolated_dir) - 1);
+            break;
+        }
+    }
+
+    if (strlen(isolated_dir) == 0) {
+        fprintf(stderr, "Directorul de izolare trebuie specificat cu optiunea -s.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // Parcurge sarind peste -o, -s si argumentele lor
+
     for (int j = 1; j < argc; j++) {
-        if (strcmp(argv[j], "-o") == 0) {
+        if ((strcmp(argv[j], "-o") == 0) || (strcmp(argv[j], "-s") == 0)) {
             j++; 
             continue;
         }
+
         if (num_dirs >= MAX_DIRS) {
             fprintf(stderr, "Prea multe directoare, maximul este %d\n", MAX_DIRS);
             exit(EXIT_FAILURE);
@@ -230,37 +247,57 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // Proceed with snapshot creation
+    // Creare procese copil
     for (i = 0; i < num_dirs; i++) {
-        printf("Creare snapshot pt directorul: %s\n", dirs[i]);
-        char snapshot_path[512], previous_snapshot_path[512];
-        snprintf(snapshot_path, sizeof(snapshot_path), "%s/snapshot_%d.txt", output_dir, i);
-        snprintf(previous_snapshot_path, sizeof(previous_snapshot_path), "%s/previous_snapshot_%d.txt", output_dir, i);
+        pid_t pid = fork();
+        if (pid == -1) {
+            perror("Eroare la fork");
+            exit(EXIT_FAILURE);
+        } else if (pid == 0) {
+            // Codul procesului copil
+            printf("Creare snapshot pt directorul: %s\n", dirs[i]);
+            char snapshot_path[512], previous_snapshot_path[512];
+            snprintf(snapshot_path, sizeof(snapshot_path), "%s/snapshot_%d.txt", output_dir, i);
+            snprintf(previous_snapshot_path, sizeof(previous_snapshot_path), "%s/previous_snapshot_%d.txt", output_dir, i);
 
-        // Creare snapshot curent
-        createSnapshot(dirs[i], snapshot_path);
-        populateSnapshot(dirs[i], snapshot_path, dirs[i]);
-        printf("Snapshot creat cu succes pentru: %s\n", dirs[i]);
+            // Creare snapshot curent
+            createSnapshot(dirs[i], snapshot_path);
+            populateSnapshot(dirs[i], snapshot_path, dirs[i]);
+            printf("Snapshot for Directory %d created successfully.\n", i + 1);
 
-        // Comparare snapshot curent cu cel anterior
-        if (access(previous_snapshot_path, F_OK) == 0) {
-            int differences = compareSnapshots(previous_snapshot_path, snapshot_path);
-            if (differences > 0) {
-                printf("Au fost gasite %d diferente intre snapshot-uri. Actualizare snapshot anterior.\n", differences);
-                updateSnapshot(previous_snapshot_path, snapshot_path);
+            // Comparare snapshot curent cu cel anterior
+            if (access(previous_snapshot_path, F_OK) == 0) {
+                int differences = compareSnapshots(previous_snapshot_path, snapshot_path);
+                if (differences > 0) {
+                    printf("Au fost gasite %d diferente între snapshot-uri. Actualizare snapshot anterior.\n", differences);
+                    updateSnapshot(previous_snapshot_path, snapshot_path);
+                } else {
+                    printf("Nu au fost gasite diferente intre snapshot-uri.\n");
+                }
             } else {
-                printf("Nu au fost gasite diferente intre snapshot-uri.\n");
+                // Dacă nu există un snapshot anterior, creează unul
+                printf("Nu a fost găsit un snapshot anterior. Creare unul nou.\n");
+                updateSnapshot(previous_snapshot_path, snapshot_path);
             }
+
+            exit(EXIT_SUCCESS);
+        }
+    }
+
+    // Codul procesului parinte
+    int status;
+    pid_t child_pid;
+    while ((child_pid = wait(&status)) > 0) {
+        if (WIFEXITED(status)) {
+            int exit_code = WEXITSTATUS(status);
+            printf("Child Process with PID %d terminated with exit code %d\n", child_pid, exit_code);
         } else {
-            // Dacă nu există un snapshot anterior, creează unul
-            printf("Nu a fost gasit un snapshot anterior. Creare unul nou.\n");
-            updateSnapshot(previous_snapshot_path, snapshot_path);
+            printf("Child Process with PID %d did not terminate normally\n", child_pid);
         }
     }
 
     return 0;
 }
-
 
 
 
