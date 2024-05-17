@@ -10,6 +10,7 @@
 #include <time.h>
 #include <stdint.h>
 #include <sys/wait.h>
+#include <sys/types.h>
 
 #define MAX_DIRS 10 // Numarul maxim de directoare acceptate in linia de comanda
 
@@ -22,6 +23,73 @@ typedef struct Info {
     off_t size; // dimensiune totala in bytes 
     time_t modified_time; // data si ora ultimei modificari
 } INFO;
+
+int arePermisiuni(const char *cale) {
+    struct stat statbuf;
+
+    if (stat(cale, &statbuf) != 0) {
+        perror("Eroare la accesarea fisierului");
+        return -1; // Nu se poate accesa informatia
+    }
+
+    // Verificam permisiunile de citire, scriere si executie pentru utilizator, grup si altii
+    if (!(statbuf.st_mode & (S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IWGRP | S_IXGRP | S_IROTH | S_IWOTH | S_IXOTH))) {
+        printf("%d\n", statbuf.st_mode);
+        return 1; // Nu are nicio permisiune
+    } else {
+        return 0; // Are permisiuni
+    }
+}
+
+void mutaInIzolare(const char *cale, const char *isolated_dir) {
+    char caleNoua[1024];
+    char *nume_fisier = basename(strdup(cale)); // Extrage numele fisierului din cale
+
+    printf("Numele fisierului: %s\n", nume_fisier);
+
+    // Construieste calea noua in directorul de izolare
+    snprintf(caleNoua, sizeof(caleNoua), "./%s/%s", isolated_dir, nume_fisier);
+
+    printf("Calea izolarii este: %s\n", caleNoua);
+
+    // Muta fisierul in directorul de izolare
+    if (rename(cale, caleNoua) != 0) {
+        perror("Eroare la mutarea fisierului in izolare");
+        exit(EXIT_FAILURE);
+    } else {
+        printf("Fisierul %s a fost mutat cu succes in izolare la %s.\n", cale, caleNoua);
+    }
+}
+
+void malitios(const char *cale, const char *isolated_dir) {
+    pid_t pid = fork();
+    
+    if (pid == -1) {
+        perror("Eroare la fork");
+        exit(EXIT_FAILURE);
+    } else if (pid == 0) {
+        // Procesul copil care va executa scriptul
+        printf("script\n");
+        execlp("./verifica.sh", "./verifica.sh", cale, NULL);
+        perror("Eroare la exec");
+        exit(EXIT_FAILURE);  // Terminam procesul copil daca execl esueaza
+    }
+
+    // Procesul parinte poate astepta terminarea copilului daca este necesar
+    int status;
+    waitpid(pid, &status, 0); // Asteapta finalizarea procesului copil
+
+    if (WIFEXITED(status)) {
+        int exit_code = WEXITSTATUS(status);
+        printf("Scriptul s-a terminat cu codul de iesire: %d\n", exit_code);
+        if (exit_code == 1) {
+            // Scriptul a indicat ca fisierul este periculos
+            mutaInIzolare(cale, isolated_dir);
+        }
+    } else {
+        printf("Procesul copil nu s-a terminat normal.\n");
+    }
+}
 
 void createSnapshot(const char *directory, const char *snapshot) {
     struct stat buff; 
@@ -50,6 +118,8 @@ void createSnapshot(const char *directory, const char *snapshot) {
     strncpy(cale, dir_info.name, sizeof(cale) - 1);
     cale[sizeof(cale) - 1] = '\0';
 
+    printf("%s\n", cale);
+
     // Scrie informatiile despre director in fisierul de snapshot
     char dir_buffer[2048];
     int dir_len = snprintf(dir_buffer, sizeof(dir_buffer), "Nume director: %s\nInode: %lu\nDimensiune: %lld\nModificat: %s\n\n",
@@ -64,7 +134,7 @@ void createSnapshot(const char *directory, const char *snapshot) {
     close(snaps);
 }
 
-void populateSnapshot(const char *directory, const char *snapshot, const char *cale) {
+void populateSnapshot(const char *directory, const char *snapshot, const char *cale, const char *isolated_dir) {
     struct stat buff;
     INFO dir_info;
 
@@ -121,13 +191,18 @@ void populateSnapshot(const char *directory, const char *snapshot, const char *c
             exit(EXIT_FAILURE);
         }
 
-        // Dacă este un director, procesează-l recursiv
+        // Dacă este un director, parvurge recursiv
         if (S_ISDIR(buff.st_mode)) {
-            populateSnapshot(path, snapshot, cale);
+            populateSnapshot(path, snapshot, cale, isolated_dir);
+        } else if (S_ISREG(buff.st_mode)) {
+            printf("%s\n", path);
+            if (arePermisiuni(path) == 1) {
+            malitios(path, isolated_dir); // Verifica si executa analiza daca fisierul nu are permisiuni
+            }
         }
     }
 
-    // inchide directorul si fisierul de snapshot
+    // Inchide directorul si fisierul de snapshot
     closedir(dir);
     close(snaps);
 }
@@ -151,7 +226,7 @@ int compareSnapshots(const char *snapshot1, const char *snapshot2) {
         }
     }
 
-    // Verifica daca unul dintre fisiere are linii suplimentare
+    // Verifica dacă unul dintre fisiere are linii suplimentare
     while (fgets(line1, sizeof(line1), file1)) {
         differences++;
         printf("Linie suplimentara in snapshot anterior:\n%s\n", line1);
@@ -188,22 +263,6 @@ void updateSnapshot(const char *snapshot1, const char *snapshot2) {
     fclose(dest);
 }
 
-int arePermisiuni(const char *cale) {
-    struct stat statbuf;
-
-    if (stat(cale, &statbuf) != 0) {
-        perror("Eroare la accesarea fisierului");
-        return -1; // Nu se poate accesa informatia
-    }
-    
-    // Verificam permisiunile de citire, scriere si executie pentru utilizator, grup si altii
-    if ((statbuf.st_mode & 0777) == 0) {
-        return 1; // Nu are nicio permisiune
-    } else {
-        return 0; // Are permisiuni
-    }
-}
-
 int main(int argc, char *argv[]) {
     if (argc < 3) {
         fprintf(stderr, "Usage: %s -o output_dir dir1 [dir2 ...]\n", argv[0]);
@@ -238,8 +297,10 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    printf("%s\n", isolated_dir);
+
     if (strlen(isolated_dir) == 0) {
-        fprintf(stderr, "Directorul de izolare trebuie specificat cu optiunea -s.\n");
+        fprintf(stderr, "Directorul de izolare trebuie specificat cu opțiunea -s.\n");
         exit(EXIT_FAILURE);
     }
 
@@ -278,21 +339,21 @@ int main(int argc, char *argv[]) {
 
             // Creare snapshot curent
             createSnapshot(dirs[i], snapshot_path);
-            populateSnapshot(dirs[i], snapshot_path, dirs[i]);
-            printf("Snapshot for Directory %d created successfully.\n", i + 1);
+            populateSnapshot(dirs[i], snapshot_path, dirs[i], isolated_dir);
+            printf("Snapshotul pentru directorul %d a fost creat cu succes.\n", i + 1);
 
             // Comparare snapshot curent cu cel anterior
             if (access(previous_snapshot_path, F_OK) == 0) {
                 int differences = compareSnapshots(previous_snapshot_path, snapshot_path);
                 if (differences > 0) {
-                    printf("Au fost gasite %d diferente între snapshot-uri. Actualizare snapshot anterior.\n", differences);
+                    printf("Au fost gasite %d diferente intre snapshot-uri. Actualizare snapshot anterior.\n", differences);
                     updateSnapshot(previous_snapshot_path, snapshot_path);
                 } else {
                     printf("Nu au fost gasite diferente intre snapshot-uri.\n");
                 }
             } else {
-                // Dacă nu există un snapshot anterior, creează unul
-                printf("Nu a fost găsit un snapshot anterior. Creare unul nou.\n");
+                // Daca nu exista un snapshot anterior, creeaza unul
+                printf("Nu a fost gasit un snapshot anterior. Creare unul nou.\n");
                 updateSnapshot(previous_snapshot_path, snapshot_path);
             }
 
@@ -306,9 +367,9 @@ int main(int argc, char *argv[]) {
     while ((child_pid = wait(&status)) > 0) {
         if (WIFEXITED(status)) {
             int exit_code = WEXITSTATUS(status);
-            printf("Child Process with PID %d terminated with exit code %d\n", child_pid, exit_code);
+            printf("Procesul copil cu PID-ul %d s-a terminat cu codul %d\n", child_pid, exit_code);
         } else {
-            printf("Child Process with PID %d did not terminate normally\n", child_pid);
+            printf("Procesul copil cu PID-ul %d nu s-a terminat normal.\n", child_pid);
         }
     }
 
